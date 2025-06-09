@@ -1,0 +1,218 @@
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(shinydashboard)
+library(readr)
+library(tidyr)
+library(plotly)
+library(scales)
+library(rsconnect)
+
+# Reading the csv files
+files <- c("Result2025.csv",
+           "Result2022.csv",
+           "Result2019.csv",
+           "Result2016.csv")
+
+Result_data <- bind_rows(lapply(files, function(file) {
+  df <- read_csv(file, skip = 0, show_col_types = FALSE,
+                 col_types = cols(LastElection = col_character()))
+  df$Source <- basename(file)
+  df
+}))
+
+Result_data <- Result_data %>%
+  rename_with(~ gsub(" ", "_", .), everything()) %>%
+  mutate(Year = as.numeric(gsub(".*?(\\d{4}).*", "\\1", Source))) %>%
+  pivot_longer(cols = c(NSW, VIC, QLD, WA, SA, TAS, ACT, NT),
+               names_to = "State",
+               values_to = "Seats") %>%
+  filter(!is.na(Seats)) %>%
+  filter(Year %in% c(2016, 2019, 2022, 2025))
+
+# UI Design
+ui <- dashboardPage(
+  dashboardHeader(title = "Australian Election Party Trends"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Party overview", tabName = "overview", icon = icon("line-chart")),
+      menuItem("State-wise Parties", tabName = "state", icon = icon("map")),
+      menuItem("Top Parties ", tabName = "top", icon = icon("star"))
+    )
+  ),
+  dashboardBody(
+    tabItems(
+      tabItem(tabName = "overview",
+              fluidRow(
+                box(
+                  title = "Top 5 Parties Nationwide", width = 12,
+                  plotlyOutput("partyTrendPlot", height = "600px"),
+                  p("Plot representing seat trends of top 5 parties nationwide over election years."),
+                  p("For Refrence:",
+                    tags$ul(
+                      tags$li(a("2025 Federal Election", href = "https://tallyroom.aec.gov.au/HouseDefault-31496.htm", target = "_blank")),
+                      tags$li(a("2022 Federal Election", href = "https://results.aec.gov.au/27966/Website/HouseDefault-27966.htm", target = "_blank")),
+                      tags$li(a("2019 Federal Election", href = "https://results.aec.gov.au/24310/Website/HouseDefault-24310.htm", target = "_blank")),
+                      tags$li(a("2016 Federal Election", href = "https://results.aec.gov.au/20499/Website/HouseDefault-20499.htm", target = "_blank"))
+                    )
+                  )
+                )
+              )
+      ),
+      tabItem(tabName = "state",
+              fluidRow(
+                box(title = "Choose State", width = 4,
+                    selectInput("state", "Select State:", choices = sort(unique(Result_data$State)))
+                )
+              ),
+              fluidRow(
+                box(
+                  title = "Top 5 Parties Seat Trends in Selected State",
+                  width = 12,
+                  plotlyOutput("stateScatterPlot", height = "500px"),
+                  p("Plot representing seat trends of top 5 parties in the selected state."),
+                  p("For Refrence:",
+                    tags$ul(
+                      tags$li(a("2025 Federal Election", href = "https://tallyroom.aec.gov.au/HouseDefault-31496.htm", target = "_blank")),
+                      tags$li(a("2022 Federal Election", href = "https://results.aec.gov.au/27966/Website/HouseDefault-27966.htm", target = "_blank")),
+                      tags$li(a("2019 Federal Election", href = "https://results.aec.gov.au/24310/Website/HouseDefault-24310.htm", target = "_blank")),
+                      tags$li(a("2016 Federal Election", href = "https://results.aec.gov.au/20499/Website/HouseDefault-20499.htm", target = "_blank"))
+                    )
+                  )
+                )
+              )
+      ),
+      tabItem(tabName = "top",
+              fluidRow(
+                box(
+                  title = "Top Parties over a year", width = 12,
+                  plotlyOutput("topPartyPlot", height = "500px"),
+                  p("Representing the top 3 parties by seats for each election year."),
+                  p("For Refrence:",
+                    tags$ul(
+                      tags$li(a("2025 Federal Election", href = "https://tallyroom.aec.gov.au/HouseDefault-31496.htm", target = "_blank")),
+                      tags$li(a("2022 Federal Election", href = "https://results.aec.gov.au/27966/Website/HouseDefault-27966.htm", target = "_blank")),
+                      tags$li(a("2019 Federal Election", href = "https://results.aec.gov.au/24310/Website/HouseDefault-24310.htm", target = "_blank")),
+                      tags$li(a("2016 Federal Election", href = "https://results.aec.gov.au/20499/Website/HouseDefault-20499.htm", target = "_blank"))
+                    )
+                  )
+                )
+              )
+      )
+    )
+  )
+)
+
+# SERVER 
+server <- function(input, output, session) {
+  
+  # Party Overview Graph
+  output$partyTrendPlot <- renderPlotly({
+    top_parties_overall <- Result_data %>%
+      group_by(Party) %>%
+      summarise(Total_Seats = sum(Seats), .groups = "drop") %>%
+      arrange(desc(Total_Seats)) %>%
+      slice_head(n = 5) %>%
+      pull(Party)
+    
+    df <- Result_data %>%
+      filter(Party %in% top_parties_overall) %>%
+      group_by(Year, Party) %>%
+      summarise(Seats = sum(Seats), .groups = "drop")
+    
+    p <- ggplot(df, aes(x = Year, y = Seats, color = Party, group = Party,
+                        text = paste0("<b>Party:</b> ", Party,
+                                      "<br><b>Year:</b> ", Year,
+                                      "<br><b>Seats:</b> ", Seats))) +
+      geom_point(size = 4) +
+      geom_line(linewidth = 1.2) +
+      scale_color_brewer(palette = "Set1") +
+      scale_x_continuous(breaks = c(2016, 2019, 2022, 2025), minor_breaks = NULL) +
+      labs(title = "Top 5 Parties Nationwide",
+           x = "Election Year", y = "Number of Seats") +
+      theme_minimal(base_size = 16) +
+      theme(plot.title = element_text(face = "bold", hjust = 0.5),
+            axis.text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            legend.title = element_blank())
+    
+    ggplotly(p, tooltip = "text") %>%
+      layout(legend = list(font = list(size = 14))) %>%
+      config(displayModeBar = FALSE)
+    
+  })
+  
+  # State wise Breakdown Graph 
+  output$stateScatterPlot <- renderPlotly({
+    req(input$state)
+    
+    top_parties_state <- Result_data %>%
+      filter(State == input$state) %>%
+      group_by(Party) %>%
+      summarise(Total_Seats_State = sum(Seats), .groups = "drop") %>%
+      arrange(desc(Total_Seats_State)) %>%
+      slice_head(n = 5) %>%
+      pull(Party)
+    
+    df <- Result_data %>%
+      filter(State == input$state, Party %in% top_parties_state) %>%
+      group_by(Year, Party) %>%
+      summarise(Seats = sum(Seats), .groups = "drop")
+    
+    p <- ggplot(df, aes(x = Year, y = Seats, color = Party, group = Party,
+                        text = paste0("<b>Party:</b> ", Party,
+                                      "<br><b>Year:</b> ", Year,
+                                      "<br><b>Seats in ", input$state, ":</b> ", Seats))) +
+      geom_point(size = 4) +
+      geom_line(linewidth = 1.2) +
+      scale_color_brewer(palette = "Dark2") +
+      scale_x_continuous(breaks = c(2016, 2019, 2022, 2025), minor_breaks = NULL) +
+      labs(title = paste("Top 5 Parties Seat Trends in", input$state),
+           x = "Election Year", y = "Number of Seats") +
+      theme_minimal(base_size = 16) +
+      theme(plot.title = element_text(face = "bold", hjust = 0.5),
+            axis.text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            legend.title = element_blank())
+    
+    ggplotly(p, tooltip = "text") %>%
+      layout(legend = list(font = list(size = 14))) %>%
+      config(displayModeBar = FALSE)
+  })
+  
+  # Top 3 Parties trend
+  output$topPartyPlot <- renderPlotly({
+    df <- Result_data %>%
+      group_by(Year, Party) %>%
+      summarise(Total_Seats = sum(Seats), .groups = "drop") %>%
+      group_by(Year) %>%
+      slice_max(Total_Seats, n = 3)
+    
+    p <- ggplot(df, aes(x = factor(Year), y = Total_Seats, fill = Party,
+                        text = paste0("<b>Party:</b> ", Party,
+                                      "<br><b>Year:</b> ", Year,
+                                      "<br><b>Seats:</b> ", Total_Seats))) +
+      geom_col(position = "dodge") +
+      scale_fill_brewer(palette = "Dark2") +
+      labs(title = "Top 3 Parties by Seats Each Year",
+           y = "Total Seats", x = "Election Year") +
+      theme_minimal(base_size = 15) +
+      theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+            axis.title = element_text(size = 14),
+            axis.text = element_text(size = 12),
+            legend.title = element_blank())
+    
+    ggplotly(p, tooltip = "text") %>%
+      layout(legend = list(font = list(size = 14))) %>%
+      config(displayModeBar = FALSE)
+  })
+}
+
+rsconnect::setAccountInfo(name='goldysharma',
+                          token='73CFC8B289A477353E7C6401CFF930CD',
+                          secret='clUS1up5mpadEhK0TkPqFQoEX56KOGsoK7IrdFCe')
+
+rsconnect::deployApp()
+
+# Running the App
+shinyApp(ui = ui, server = server)
